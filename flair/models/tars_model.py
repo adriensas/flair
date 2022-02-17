@@ -504,6 +504,7 @@ class TARSTagger(FewshotClassifier):
 
         overall_loss = 0
         overall_count = 0
+        all_labels = [label.decode("utf-8") for label in self.get_current_label_dictionary().idx2item]
         with torch.no_grad():
             for batch in dataloader:
 
@@ -513,33 +514,34 @@ class TARSTagger(FewshotClassifier):
                     continue
 
                 # go through each sentence in the batch
-                for sentence in batch:
+                batch = [sentence.remove_labels(label_name) for sentence in batch] # Always remove the labels first
 
-                    # always remove tags first
-                    sentence.remove_labels(label_name)
+                all_detected_batch = []
+                for label in all_labels:
+                    tars_batch = [
+                        self._get_tars_formatted_sentence(label, sentence) for sentence in batch
+                    ] # TARS formatted sentences batch
 
-                    all_labels = [label.decode("utf-8") for label in self.get_current_label_dictionary().idx2item]
+                    loss_and_count = self.tars_model.predict(
+                        tars_batch,
+                        label_name=label_name,
+                        return_loss=True,
+                    )
 
-                    all_detected = {}
-                    for label in all_labels:
-                        tars_sentence = self._get_tars_formatted_sentence(label, sentence)
+                    overall_loss += loss_and_count[0].item()
+                    overall_count += loss_and_count[1]
 
-                        loss_and_count = self.tars_model.predict(
-                            tars_sentence,
-                            label_name=label_name,
-                            return_loss=True,
-                        )
-
-                        overall_loss += loss_and_count[0].item()
-                        overall_count += loss_and_count[1]
-
+                    for tars_sentence in tars_batch:
+                        all_detected = {}
                         for predicted in tars_sentence.get_labels(label_name):
                             predicted.value = label
                             all_detected[predicted] = predicted.score
+                        all_detected_batch.append(all_detected)
 
-                    if most_probable_first:
-                        import operator
-
+                if most_probable_first:
+                    import operator
+                    
+                    for sentence, all_detected in list(zip(batch, all_detected_batch)):
                         already_set_indices: List[int] = []
 
                         sorted_x = sorted(all_detected.items(), key=operator.itemgetter(1))
